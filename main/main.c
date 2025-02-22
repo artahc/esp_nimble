@@ -10,6 +10,10 @@
 #include "services/gatt/ble_svc_gatt.h"
 #include <host/ble_uuid.h>
 #include <os/os_mbuf.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/queue.h"
+#include "driver/gpio.h"
 
 #define TAG "esp_ble"
 #define GATT_SVR_SVC_ALERT_UUID 0x1811
@@ -28,6 +32,8 @@ static const ble_uuid128_t lock_cmd_chr_uuid = BLE_UUID128_INIT(0xB9, 0x43, 0x3D
 
 static const ble_uuid16_t battery_svc_uuid = BLE_UUID16_INIT(0x180F);
 static const ble_uuid16_t battery_level_chr_uuid = BLE_UUID16_INIT(0x2A19);
+
+QueueHandle_t ble_cmd_queue_handle_t;
 
 void ble_store_config_init(void);
 
@@ -98,15 +104,16 @@ static int gatt_access_cb(uint16_t conn_handle, uint16_t attr_handle,
     case BLE_GATT_ACCESS_OP_READ_CHR:
         break;
     case BLE_GATT_ACCESS_OP_WRITE_CHR:
-        uint8_t buffer[128];
-        int len = os_mbuf_copydata(ctxt->om, 0, ctxt->om->om_len, buffer);
-        if (len > 0)
-        {
-            buffer[len] = '\0';
-        }
-
         ESP_LOGI(TAG, "received write characteristic command to conn_handle=%d, attr_handle=%d", conn_handle, attr_handle);
         ESP_LOG_BUFFER_HEX(TAG, ctxt->om->om_data, OS_MBUF_PKTLEN(ctxt->om));
+
+        ESP_LOGI(TAG, "Sending queue task");
+        uint8_t value = 5;
+        int rc = xQueueSend(ble_cmd_queue_handle_t, &value, pdMS_TO_TICKS(100));
+        if (rc != pdTRUE)
+        {
+            ESP_LOGE(TAG, "error sending to queue, rc=%d", rc);
+        }
 
         break;
     case BLE_GATT_ACCESS_OP_READ_DSC:
@@ -175,11 +182,27 @@ static void gatt_sync_cb()
     ble_advertise();
 }
 
-void host_task()
+void nimble_host_task()
 {
     ESP_LOGI(TAG, "BLE Host Task Started");
     nimble_port_run();
     nimble_port_freertos_deinit();
+}
+
+static void ble_cmd_handler(void *arg)
+{
+    uint8_t value;
+    while (1)
+    {
+        if (xQueueReceive(ble_cmd_queue_handle_t, &value, portMAX_DELAY) == pdTRUE)
+        {
+            ESP_LOGI(TAG, "Handling queue task, value=%d", value);
+
+            gpio_set_level(0, 1);
+            vTaskDelay(3000 / portTICK_PERIOD_MS);
+            gpio_set_level(0, 0);
+        }
+    }
 }
 
 static const struct ble_gatt_svc_def ble_gatt_svcs[] = {
@@ -286,5 +309,16 @@ void app_main(void)
 
     ble_store_config_init();
 
-    nimble_port_freertos_init(host_task);
+    nimble_port_freertos_init(nimble_host_task);
+
+    gpio_config_t io_conf = {};
+    io_conf.intr_type = GPIO_INTR_DISABLE;
+    io_conf.mode = GPIO_MODE_OUTPUT;
+    io_conf.pin_bit_mask = (1ULL << 0);
+    io_conf.pull_down_en = 0;
+    io_conf.pull_up_en = 0;
+    gpio_config(&io_conf);
+
+    ble_cmd_queue_handle_t = xQueueCreate(5, sizeof(uint8_t));
+    xTaskCreate(ble_cmd_handler, "ble_cmd_handler", 4096, NULL, 3, NULL);
 }
