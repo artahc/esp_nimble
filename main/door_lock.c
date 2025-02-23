@@ -6,9 +6,6 @@
 #include <driver/gpio.h>
 #include "sdkconfig.h"
 #include "door_lock.h"
-#include "cmd.pb.h"
-#include "pb_encode.h"
-#include "pb_decode.h"
 
 #define GPIO_OUTPUT_DOOR_BOLT 0
 #define GPIO_OUTPUT_ALL (1ULL << GPIO_OUTPUT_DOOR_BOLT)

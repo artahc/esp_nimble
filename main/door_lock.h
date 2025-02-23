@@ -1,5 +1,4 @@
 #include <stdint.h>
-#include "proto/cmd.pb.h"
 
 typedef void (*relock_callback_fn)(void);
 

@@ -15,7 +15,6 @@
 #include "freertos/queue.h"
 #include "driver/gpio.h"
 #include "door_lock.c"
-#include "cmd.pb.h"
 #include "freertos/timers.h"
 
 #define TAG "esp_ble"
@@ -97,15 +96,6 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
     return 0;
 }
 
-static int gatt_on_write_attr(uint16_t conn_handle,
-                              const struct ble_gatt_error *error,
-                              struct ble_gatt_attr *attr,
-                              void *arg)
-{
-    ble_gatts_notify(conn_handle, lock_state_chr_handle);
-    return 0;
-}
-
 static void notify_lock_state_update(void)
 {
     ble_gatts_chr_updated(lock_state_chr_handle);
@@ -136,7 +126,6 @@ static int gatt_access_cb(uint16_t conn_handle, uint16_t attr_handle,
 
         if (attr_handle == lock_cmd_chr_handle)
         {
-            int lock_state;
             door_cmd_unlock();
             notify_lock_state_update();
             door_cmd_begin_relock_timer(notify_lock_state_update);
