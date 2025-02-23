@@ -110,8 +110,8 @@ static int gatt_access_cb(uint16_t conn_handle, uint16_t attr_handle,
         ESP_LOGI(TAG, "received read characteristic command to conn_handle=%d, attr_handle=%d", conn_handle, attr_handle);
         if (attr_handle == lock_state_chr_handle)
         {
-            int lock_state = door_cmd_get_lock_state();
-            int rc = os_mbuf_append(ctxt->om, &lock_state, 1);
+            uint8_t lock_state = door_cmd_get_lock_state();
+            int rc = os_mbuf_append(ctxt->om, &lock_state, sizeof(lock_state));
             if (rc != 0)
             {
                 ESP_LOGE(TAG, "error read %d", rc);
