@@ -1,10 +1,10 @@
-
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
 #include "nimble/ble.h"
 #include "host/ble_hs.h"
+#include "host/ble_gatt.h"
 #include "host/ble_store.h"
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
@@ -15,6 +15,8 @@
 #include "freertos/queue.h"
 #include "driver/gpio.h"
 #include "door_lock.c"
+#include "cmd.pb.h"
+#include "freertos/timers.h"
 
 #define TAG "esp_ble"
 #define GATT_SVR_SVC_ALERT_UUID 0x1811
@@ -95,24 +97,49 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
     return 0;
 }
 
+static int gatt_on_write_attr(uint16_t conn_handle,
+                              const struct ble_gatt_error *error,
+                              struct ble_gatt_attr *attr,
+                              void *arg)
+{
+    ble_gatts_notify(conn_handle, lock_state_chr_handle);
+    return 0;
+}
+
+static void notify_lock_state_update(void)
+{
+    ble_gatts_chr_updated(lock_state_chr_handle);
+}
+
 static int gatt_access_cb(uint16_t conn_handle, uint16_t attr_handle,
                           struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
-
     switch (ctxt->op)
     {
     case BLE_GATT_ACCESS_OP_READ_CHR:
+        ESP_LOGI(TAG, "received read characteristic command to conn_handle=%d, attr_handle=%d", conn_handle, attr_handle);
+        if (attr_handle == lock_state_chr_handle)
+        {
+            int lock_state = door_cmd_get_lock_state();
+            int rc = os_mbuf_append(ctxt->om, &lock_state, 1);
+            if (rc != 0)
+            {
+                ESP_LOGE(TAG, "error read %d", rc);
+            }
+        }
+
         break;
     case BLE_GATT_ACCESS_OP_WRITE_CHR:
         ESP_LOGI(TAG, "received write characteristic command to conn_handle=%d, attr_handle=%d", conn_handle, attr_handle);
+        ESP_LOGI(TAG, "buffer length: %d, value=", OS_MBUF_PKTLEN(ctxt->om));
         ESP_LOG_BUFFER_HEX(TAG, ctxt->om->om_data, OS_MBUF_PKTLEN(ctxt->om));
 
-        ESP_LOGI(TAG, "Sending queue task");
-        uint8_t value = get_auto_relock_duration();
-        int rc = xQueueSend(door_lock_queue_handle, &value, pdMS_TO_TICKS(100));
-        if (rc != pdTRUE)
+        if (attr_handle == lock_cmd_chr_handle)
         {
-            ESP_LOGE(TAG, "error sending to queue, rc=%d", rc);
+            int lock_state;
+            door_cmd_unlock();
+            notify_lock_state_update();
+            door_cmd_begin_relock_timer(notify_lock_state_update);
         }
 
         break;
@@ -202,6 +229,11 @@ static const struct ble_gatt_svc_def ble_gatt_svcs[] = {
                 .val_handle = &lock_state_chr_handle,
                 .access_cb = gatt_access_cb,
                 .descriptors = (struct ble_gatt_dsc_def[]){
+                    {
+                        .access_cb = gatt_access_cb,
+                        .att_flags = BLE_GATT_ACCESS_OP_READ_DSC,
+                    },
+
                     {0},
                 },
             },

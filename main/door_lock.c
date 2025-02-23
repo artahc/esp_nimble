@@ -6,47 +6,73 @@
 #include <driver/gpio.h>
 #include "sdkconfig.h"
 #include "door_lock.h"
+#include "cmd.pb.h"
+#include "pb_encode.h"
+#include "pb_decode.h"
 
 #define GPIO_OUTPUT_DOOR_BOLT 0
 #define GPIO_OUTPUT_ALL (1ULL << GPIO_OUTPUT_DOOR_BOLT)
 
 static const char *TAG = "door_lock";
+static TimerHandle_t relock_timer;
+static relock_callback_fn relock_cb = NULL;
 
-QueueHandle_t door_lock_queue_handle;
-static SemaphoreHandle_t door_lock_semaphore;
+static int bolt_level = 0;
 
-static void door_lock_task(void *arg)
-{
-    uint8_t value;
-    while (1)
-    {
-        if (xQueueReceive(door_lock_queue_handle, &value, portMAX_DELAY) == pdTRUE)
-        {
-            if (xSemaphoreTake(door_lock_semaphore, portMAX_DELAY) == pdTRUE)
-            {
-                ESP_LOGI(TAG, "Handling queue task, value=%d", value);
-
-                door_cmd_unlock();
-                vTaskDelay(1000 / portTICK_PERIOD_MS);
-
-                ESP_LOGI(TAG, "Completed queue task value=%d", value);
-
-                xSemaphoreGive(door_lock_semaphore);
-            }
-        }
-    }
-}
-
-uint8_t get_auto_relock_duration()
+uint8_t door_cmd_get_relock_duration()
 {
     return 5;
 }
 
+uint8_t door_cmd_get_lock_state()
+{
+    ESP_LOGI(TAG, "bolt_level=%d", bolt_level);
+    return bolt_level;
+}
+
 void door_cmd_unlock()
 {
+    ESP_LOGI(TAG, "unlock");
     gpio_set_level(GPIO_OUTPUT_DOOR_BOLT, 1);
-    vTaskDelay((get_auto_relock_duration() * 1000) / portTICK_PERIOD_MS);
+    bolt_level = 1;
+}
+
+void door_cmd_lock()
+{
+    ESP_LOGI(TAG, "lock");
     gpio_set_level(GPIO_OUTPUT_DOOR_BOLT, 0);
+    bolt_level = 0;
+}
+
+static void auto_relock_timer_cb(TimerHandle_t timer)
+{
+    ESP_LOGI(TAG, "end auto relock timer");
+    door_cmd_lock();
+
+    if (relock_cb != NULL)
+    {
+        relock_cb();
+    }
+}
+
+void door_cmd_begin_relock_timer(relock_callback_fn cb)
+{
+    uint8_t dur = door_cmd_get_relock_duration();
+    ESP_LOGI(TAG, "begin auto relock timer: relock_duration=%d", dur);
+
+    if (relock_timer != NULL)
+    {
+        if (xTimerIsTimerActive(relock_timer))
+        {
+            xTimerStop(relock_timer, 0);
+        }
+        xTimerDelete(relock_timer, 0);
+        relock_timer = NULL;
+    }
+
+    relock_cb = cb;
+    relock_timer = xTimerCreate("relock_timer", pdMS_TO_TICKS(dur * 1000), pdFALSE, (void *)0, auto_relock_timer_cb);
+    xTimerStart(relock_timer, 0);
 }
 
 void door_lock_init()
@@ -59,8 +85,7 @@ void door_lock_init()
     io_conf.pull_up_en = 0;
     gpio_config(&io_conf);
 
-    door_lock_queue_handle = xQueueCreate(5, sizeof(uint8_t));
-    door_lock_semaphore = xSemaphoreCreateMutex();
-
-    xTaskCreate(door_lock_task, "door_lock_task", 4096, NULL, 3, NULL);
+    // door_lock_queue_handle = xQueueCreate(5, sizeof(uint8_t));
+    // door_lock_semaphore = xSemaphoreCreateMutex();
+    // xTaskCreate(door_lock_task, "door_lock_task", 4096, NULL, 3, NULL);
 }
