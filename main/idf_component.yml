@@ -1,3 +1,7 @@
 dependencies:
   nimble_peripheral_utils:
     path: ${IDF_PATH}/examples/bluetooth/nimble/common/nimble_peripheral_utils
+    
+targets:
+  - esp32c3
+  - esp32c6
