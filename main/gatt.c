@@ -24,9 +24,14 @@ static const ble_uuid128_t lock_cmd_chr_uuid = BLE_UUID128_INIT(0xB9, 0x43, 0x3D
 static const ble_uuid16_t battery_svc_uuid = BLE_UUID16_INIT(0x180F);
 static const ble_uuid16_t battery_level_chr_uuid = BLE_UUID16_INIT(0x2A19);
 
-static void notify_lock_state_update(void)
+static void notify_door_lock_state_update(int door_lock_state)
 {
     ble_gatts_chr_updated(lock_state_chr_handle);
+    uint8_t dpi = door_cmd_get_dpi_state();
+    if (door_lock_state == 1 && dpi == 1)
+    {
+        door_cmd_begin_relock_timer();
+    }
 }
 
 static int door_lock_chr_access_cb(uint16_t conn_handle, uint16_t attr_handle,
@@ -38,15 +43,15 @@ static int door_lock_chr_access_cb(uint16_t conn_handle, uint16_t attr_handle,
         ESP_LOGI(TAG, "received read characteristic command to conn_handle=%d, attr_handle=%d", conn_handle, attr_handle);
         if (attr_handle == lock_state_chr_handle)
         {
-            uint8_t lock_state = door_cmd_get_lock_state();
+            uint8_t lock_state = door_cmd_get_door_lock_state();
             int rc = os_mbuf_append(ctxt->om, &lock_state, sizeof(lock_state));
             if (rc != 0)
             {
                 ESP_LOGE(TAG, "error read %d", rc);
             }
         }
-
         break;
+
     case BLE_GATT_ACCESS_OP_WRITE_CHR:
         ESP_LOGI(TAG, "received write characteristic command to conn_handle=%d, attr_handle=%d", conn_handle, attr_handle);
         ESP_LOGI(TAG, "buffer length: %d, value=", OS_MBUF_PKTLEN(ctxt->om));
@@ -55,8 +60,6 @@ static int door_lock_chr_access_cb(uint16_t conn_handle, uint16_t attr_handle,
         if (attr_handle == lock_cmd_chr_handle)
         {
             door_cmd_unlock();
-            notify_lock_state_update();
-            door_cmd_begin_relock_timer(notify_lock_state_update);
         }
 
         break;
@@ -78,47 +81,6 @@ static int battery_access_cb(uint16_t conn_handle, uint16_t attr_handle,
     return 0;
 }
 
-static void gatt_reset_cb(int reason)
-{
-    printf("Reset callback %d\n", reason);
-}
-
-static void gatt_register_cb(struct ble_gatt_register_ctxt *ctxt,
-                             void *arg)
-{
-    char buf[BLE_UUID_STR_LEN];
-    switch (ctxt->op)
-    {
-    case BLE_GATT_REGISTER_OP_SVC:
-        ESP_LOGI(TAG, "registered service %s with handle=%d",
-                 ble_uuid_to_str(ctxt->svc.svc_def->uuid, buf),
-                 ctxt->svc.handle);
-        break;
-
-    case BLE_GATT_REGISTER_OP_CHR:
-        ESP_LOGI(TAG, "registering characteristic %s with "
-                      "def_handle=%d val_handle=%d",
-                 ble_uuid_to_str(ctxt->chr.chr_def->uuid, buf),
-                 ctxt->chr.def_handle,
-                 ctxt->chr.val_handle);
-        break;
-
-    case BLE_GATT_REGISTER_OP_DSC:
-        ESP_LOGI(TAG, "registering descriptor %s with handle=%d",
-                 ble_uuid_to_str(ctxt->dsc.dsc_def->uuid, buf),
-                 ctxt->dsc.handle);
-        break;
-
-    default:
-        break;
-    }
-}
-
-static void gatt_sync_cb()
-{
-    adv_init();
-}
-
 static const struct ble_gatt_svc_def ble_gatt_svcs[] = {
     // Door Lock Service
     {
@@ -128,7 +90,7 @@ static const struct ble_gatt_svc_def ble_gatt_svcs[] = {
             // Lock State Characteristic
             {
                 .uuid = &lock_state_chr_uuid.u,
-                .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
+                .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY | BLE_GATT_CHR_F_READ_AUTHEN,
                 .val_handle = &lock_state_chr_handle,
                 .access_cb = door_lock_chr_access_cb,
             },
@@ -136,7 +98,7 @@ static const struct ble_gatt_svc_def ble_gatt_svcs[] = {
             // Lock Command Characteristic
             {
                 .uuid = &lock_cmd_chr_uuid.u,
-                .flags = BLE_GATT_CHR_F_WRITE,
+                .flags = BLE_GATT_CHR_F_WRITE_NO_RSP | BLE_GATT_CHR_F_WRITE_AUTHEN,
                 .val_handle = &lock_cmd_chr_handle,
                 .access_cb = door_lock_chr_access_cb,
             },
@@ -171,11 +133,6 @@ static const struct ble_gatt_svc_def ble_gatt_svcs[] = {
 void gatt_svc_init()
 {
 
-    ble_hs_cfg.reset_cb = gatt_reset_cb;
-    ble_hs_cfg.gatts_register_cb = gatt_register_cb;
-    ble_hs_cfg.sync_cb = gatt_sync_cb;
-    ble_hs_cfg.sm_io_cap = 3;
-
     int rc;
     rc = ble_gatts_count_cfg(ble_gatt_svcs);
     if (rc != 0)
@@ -190,6 +147,8 @@ void gatt_svc_init()
         ESP_LOGE(TAG, "failed to register ble services: %d", rc);
         return;
     }
+
+    register_door_lock_state_cb(notify_door_lock_state_update);
 
     ble_svc_gatt_init();
 }

@@ -3,59 +3,74 @@
 #include "freertos/task.h"
 #include "freertos/queue.h"
 #include "portmacro.h"
-#include <driver/gpio.h>
+#include "driver/gpio.h"
 #include "sdkconfig.h"
 #include "door_lock.h"
 
 #define GPIO_OUTPUT_DOOR_BOLT 0
+#define GPIO_INPUT_DPI 1
 #define GPIO_OUTPUT_ALL (1ULL << GPIO_OUTPUT_DOOR_BOLT)
+#define GPIO_INPUT_ALL (1ULL << GPIO_INPUT_DPI)
 
 static const char *TAG = "door_lock";
 static TimerHandle_t relock_timer;
-static relock_callback_fn relock_cb = NULL;
+static door_state_cb_fn door_state_cb = NULL;
 
-static int bolt_level = 0;
+static uint8_t door_bolt_state = 0; // 0=locked, 1=unlocked
+static uint8_t dpi_state = 0;       // 0=open, 1=closed
 
-uint8_t door_cmd_get_relock_duration()
+static QueueHandle_t dpi_event_queue;
+
+// Door Lock
+uint8_t door_cmd_get_door_lock_state()
 {
-    return 5;
-}
-
-uint8_t door_cmd_get_lock_state()
-{
-    ESP_LOGI(TAG, "bolt_level=%d", bolt_level);
-    return bolt_level;
+    ESP_LOGI(TAG, "door_bolt_state=%d", door_bolt_state);
+    return door_bolt_state;
 }
 
 void door_cmd_unlock()
 {
     ESP_LOGI(TAG, "unlock");
     gpio_set_level(GPIO_OUTPUT_DOOR_BOLT, 1);
-    bolt_level = 1;
+    door_bolt_state = 1;
+    if (door_state_cb != NULL)
+    {
+        door_state_cb(door_bolt_state);
+    }
 }
 
 void door_cmd_lock()
 {
     ESP_LOGI(TAG, "lock");
     gpio_set_level(GPIO_OUTPUT_DOOR_BOLT, 0);
-    bolt_level = 0;
-}
-
-static void auto_relock_timer_cb(TimerHandle_t timer)
-{
-    ESP_LOGI(TAG, "end auto relock timer");
-    door_cmd_lock();
-
-    if (relock_cb != NULL)
+    door_bolt_state = 0;
+    if (door_state_cb != NULL)
     {
-        relock_cb();
+        door_state_cb(door_bolt_state);
     }
 }
 
-void door_cmd_begin_relock_timer(relock_callback_fn cb)
+void register_door_lock_state_cb(door_state_cb_fn cb)
+{
+    door_state_cb = cb;
+}
+
+// Relock
+uint8_t door_cmd_get_relock_duration()
+{
+    return 5;
+}
+
+static void relock_timer_cb(TimerHandle_t timer)
+{
+    ESP_LOGI(TAG, "end relock timer");
+    door_cmd_lock();
+}
+
+void door_cmd_begin_relock_timer()
 {
     uint8_t dur = door_cmd_get_relock_duration();
-    ESP_LOGI(TAG, "begin auto relock timer: relock_duration=%d", dur);
+    ESP_LOGI(TAG, "begin relock timer: relock_duration=%d", dur);
 
     if (relock_timer != NULL)
     {
@@ -67,22 +82,60 @@ void door_cmd_begin_relock_timer(relock_callback_fn cb)
         relock_timer = NULL;
     }
 
-    relock_cb = cb;
-    relock_timer = xTimerCreate("relock_timer", pdMS_TO_TICKS(dur * 1000), pdFALSE, (void *)0, auto_relock_timer_cb);
+    relock_timer = xTimerCreate("relock_timer", pdMS_TO_TICKS(dur * 1000), pdFALSE, (void *)0, relock_timer_cb);
     xTimerStart(relock_timer, 0);
 }
 
+// DPI
+static void IRAM_ATTR dpi_isr_handler(void *arg)
+{
+    uint8_t gpio_num = (uint8_t)arg;
+    xQueueSendFromISR(dpi_event_queue, &gpio_num, NULL);
+}
+
+static void dpi_event_handler(void *arg)
+{
+    uint8_t gpio;
+    while (true)
+    {
+        if (xQueueReceive(dpi_event_queue, &gpio, portMAX_DELAY))
+        {
+            dpi_state = gpio_get_level(gpio);
+            ESP_LOGI(TAG, "dpi_level=%d", dpi_state);
+            if (dpi_state == 1 && door_bolt_state == 1 && door_state_cb != NULL)
+            {
+                door_cmd_begin_relock_timer();
+            }
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(300));
+    }
+}
+
+uint8_t door_cmd_get_dpi_state()
+{
+    ESP_LOGI(TAG, "dpi_state=%d", dpi_state);
+    return dpi_state;
+}
+
+// Initialization
 void door_lock_init()
 {
     gpio_config_t io_conf = {};
     io_conf.intr_type = GPIO_INTR_DISABLE;
     io_conf.mode = GPIO_MODE_OUTPUT;
     io_conf.pin_bit_mask = GPIO_OUTPUT_ALL;
-    io_conf.pull_down_en = 0;
-    io_conf.pull_up_en = 0;
     gpio_config(&io_conf);
 
-    // door_lock_queue_handle = xQueueCreate(5, sizeof(uint8_t));
-    // door_lock_semaphore = xSemaphoreCreateMutex();
-    // xTaskCreate(door_lock_task, "door_lock_task", 4096, NULL, 3, NULL);
+    io_conf.intr_type = GPIO_INTR_ANYEDGE;
+    io_conf.mode = GPIO_MODE_INPUT;
+    io_conf.pin_bit_mask = GPIO_INPUT_ALL;
+    io_conf.pull_down_en = 1;
+    gpio_config(&io_conf);
+
+    dpi_event_queue = xQueueCreate(10, sizeof(uint8_t));
+    xTaskCreate(dpi_event_handler, "dpi_event_handler", 2048, NULL, 10, NULL);
+
+    gpio_install_isr_service(0);
+    gpio_isr_handler_add(GPIO_INPUT_DPI, dpi_isr_handler, (void *)GPIO_INPUT_DPI);
 }

@@ -1,7 +1,7 @@
 #include "esp_log.h"
+#include "esp_random.h"
 #include "host/ble_hs.h"
 #include "services/gap/ble_svc_gap.h"
-
 #include "gap.h"
 
 static const char TAG[] = "gap";
@@ -9,20 +9,63 @@ static const char TAG[] = "gap";
 static uint8_t own_addr_type;
 static int gap_event_cb(struct ble_gap_event *event, void *arg)
 {
+    int rc = 0;
+    struct ble_gap_conn_desc desc;
 
     switch (event->type)
     {
     case BLE_GAP_EVENT_CONNECT:
         ble_gap_adv_stop();
-        break;
+        return rc;
     case BLE_GAP_EVENT_DISCONNECT:
         start_adv();
-        break;
-    default:
-        break;
-    }
+        return rc;
+    case BLE_GAP_EVENT_ENC_CHANGE:
+        if (event->enc_change.status == 0)
+        {
+            ESP_LOGI(TAG, "connection encrypted!");
+        }
+        else
+        {
+            ESP_LOGE(TAG, "connection encryption failed, status: %d",
+                     event->enc_change.status);
+        }
+        return rc;
 
-    return 0;
+    case BLE_GAP_EVENT_REPEAT_PAIRING:
+        rc = ble_gap_conn_find(event->repeat_pairing.conn_handle, &desc);
+        if (rc != 0)
+        {
+            ESP_LOGE(TAG, "failed to find connection, error code %d", rc);
+            return rc;
+        }
+        ble_store_util_delete_peer(&desc.peer_id_addr);
+        ESP_LOGI(TAG, "repairing...");
+        return 0;
+        // return BLE_GAP_REPEAT_PAIRING_RETRY;
+
+    case BLE_GAP_EVENT_PASSKEY_ACTION:
+        if (event->passkey.params.action == BLE_SM_IOACT_DISP)
+        {
+            struct ble_sm_io pkey = {0};
+            pkey.action = event->passkey.params.action;
+            pkey.passkey = 100000 + esp_random() % 900000;
+            ESP_LOGI(TAG, "enter passkey %" PRIu32 " on the peer side",
+                     pkey.passkey);
+            rc = ble_sm_inject_io(event->passkey.conn_handle, &pkey);
+            if (rc != 0)
+            {
+                ESP_LOGE(TAG,
+                         "failed to inject security manager io, error code: %d",
+                         rc);
+                return rc;
+            }
+        }
+        return rc;
+
+    default:
+        return 0;
+    }
 }
 
 void adv_init()
