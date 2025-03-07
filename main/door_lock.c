@@ -14,45 +14,48 @@
 
 static const char *TAG = "door_lock";
 static TimerHandle_t relock_timer;
-static door_state_cb_fn door_state_cb = NULL;
-
-static uint8_t door_bolt_state = 0; // 0=locked, 1=unlocked
-static uint8_t dpi_state = 0;       // 0=open, 1=closed
-
 static QueueHandle_t dpi_event_queue;
 
+static door_state_t door_state = {0};
+static door_state_cb_fn door_state_cb = NULL;
+
+static void notify_door_state_cb();
+
 // Door Lock
-uint8_t door_cmd_get_door_lock_state()
+door_state_t door_cmd_get_door_state()
 {
-    ESP_LOGI(TAG, "door_bolt_state=%d", door_bolt_state);
-    return door_bolt_state;
+    ESP_LOGI(TAG, "door_bolt_state=%d, dpi_state=%d", door_state.door_bolt_state, door_state.dpi_state);
+    return door_state;
 }
 
 void door_cmd_unlock()
 {
     ESP_LOGI(TAG, "unlock");
     gpio_set_level(GPIO_OUTPUT_DOOR_BOLT, 1);
-    door_bolt_state = 1;
-    if (door_state_cb != NULL)
-    {
-        door_state_cb(door_bolt_state);
-    }
+    door_state.door_bolt_state = 1;
+    notify_door_state_cb();
 }
 
 void door_cmd_lock()
 {
     ESP_LOGI(TAG, "lock");
     gpio_set_level(GPIO_OUTPUT_DOOR_BOLT, 0);
-    door_bolt_state = 0;
-    if (door_state_cb != NULL)
-    {
-        door_state_cb(door_bolt_state);
-    }
+    door_state.door_bolt_state = 0;
+    notify_door_state_cb();
 }
 
 void register_door_lock_state_cb(door_state_cb_fn cb)
 {
     door_state_cb = cb;
+}
+
+static void notify_door_state_cb()
+{
+    ESP_LOGI(TAG, "door_state: door_bolt_state=%d, dpi_state=%d", door_state.door_bolt_state, door_state.dpi_state);
+    if (door_state_cb != NULL)
+    {
+        door_state_cb(door_state);
+    }
 }
 
 // Relock
@@ -100,22 +103,12 @@ static void dpi_event_handler(void *arg)
     {
         if (xQueueReceive(dpi_event_queue, &gpio, portMAX_DELAY))
         {
-            dpi_state = gpio_get_level(gpio);
-            ESP_LOGI(TAG, "dpi_level=%d", dpi_state);
-            if (dpi_state == 1 && door_bolt_state == 1 && door_state_cb != NULL)
-            {
-                door_cmd_begin_relock_timer();
-            }
+            door_state.dpi_state = gpio_get_level(gpio);
+            notify_door_state_cb();
         }
 
         vTaskDelay(pdMS_TO_TICKS(300));
     }
-}
-
-uint8_t door_cmd_get_dpi_state()
-{
-    ESP_LOGI(TAG, "dpi_state=%d", dpi_state);
-    return dpi_state;
 }
 
 // Initialization
@@ -132,6 +125,9 @@ void door_lock_init()
     io_conf.pin_bit_mask = GPIO_INPUT_ALL;
     io_conf.pull_down_en = 1;
     gpio_config(&io_conf);
+
+    door_state.door_bolt_state = gpio_get_level(GPIO_OUTPUT_DOOR_BOLT);
+    door_state.dpi_state = gpio_get_level(GPIO_INPUT_DPI);
 
     dpi_event_queue = xQueueCreate(10, sizeof(uint8_t));
     xTaskCreate(dpi_event_handler, "dpi_event_handler", 2048, NULL, 10, NULL);

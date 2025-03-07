@@ -15,8 +15,12 @@ static uint16_t lock_cmd_chr_handle;
 // Door Lock GATT Service
 // String: 6f498281b4dd498864456e68c52339ba
 static const ble_uuid128_t lock_svc_uuid = BLE_UUID128_INIT(0x64, 0x45, 0x6E, 0x68, 0xC5, 0x23, 0x39, 0xBA, 0x88, 0x49, 0xDD, 0xB4, 0x81, 0x82, 0x49, 0x6F);
-/// String: b43f27bf563f08a4cf4e3fb95b0024c0
+
+// Lock State Characteristic
+// String: b43f27bf563f08a4cf4e3fb95b0024c0
 static const ble_uuid128_t lock_state_chr_uuid = BLE_UUID128_INIT(0xCF, 0x4E, 0x3F, 0xB9, 0x5B, 0x00, 0x24, 0xC0, 0xA4, 0x08, 0x3F, 0x56, 0xBF, 0x27, 0x3F, 0xB4);
+
+// Lock Command Characteristic
 // String: e089c541e6045fabb9433d8947b3ded5
 static const ble_uuid128_t lock_cmd_chr_uuid = BLE_UUID128_INIT(0xB9, 0x43, 0x3D, 0x89, 0x47, 0xB3, 0xDE, 0xD5, 0xAB, 0x5F, 0x04, 0xE6, 0x41, 0xC5, 0x89, 0xE0);
 
@@ -24,14 +28,13 @@ static const ble_uuid128_t lock_cmd_chr_uuid = BLE_UUID128_INIT(0xB9, 0x43, 0x3D
 static const ble_uuid16_t battery_svc_uuid = BLE_UUID16_INIT(0x180F);
 static const ble_uuid16_t battery_level_chr_uuid = BLE_UUID16_INIT(0x2A19);
 
-static void notify_door_lock_state_update(int door_lock_state)
+static void door_state_update_cb(door_state_t door_state)
 {
-    ble_gatts_chr_updated(lock_state_chr_handle);
-    uint8_t dpi = door_cmd_get_dpi_state();
-    if (door_lock_state == 1 && dpi == 1)
+    if (door_state.door_bolt_state == 1 && door_state.dpi_state == 1)
     {
         door_cmd_begin_relock_timer();
     }
+    ble_gatts_chr_updated(lock_state_chr_handle);
 }
 
 static int door_lock_chr_access_cb(uint16_t conn_handle, uint16_t attr_handle,
@@ -43,8 +46,12 @@ static int door_lock_chr_access_cb(uint16_t conn_handle, uint16_t attr_handle,
         ESP_LOGI(TAG, "received read characteristic command to conn_handle=%d, attr_handle=%d", conn_handle, attr_handle);
         if (attr_handle == lock_state_chr_handle)
         {
-            uint8_t lock_state = door_cmd_get_door_lock_state();
-            int rc = os_mbuf_append(ctxt->om, &lock_state, sizeof(lock_state));
+            door_state_t door_state = door_cmd_get_door_state();
+            uint8_t buffer[sizeof(door_state)];
+            memcpy(buffer, &door_state, sizeof(door_state));
+
+
+            int rc = os_mbuf_append(ctxt->om, &buffer, sizeof(buffer));
             if (rc != 0)
             {
                 ESP_LOGE(TAG, "error read %d", rc);
@@ -148,7 +155,7 @@ void gatt_svc_init()
         return;
     }
 
-    register_door_lock_state_cb(notify_door_lock_state_update);
+    register_door_lock_state_cb(door_state_update_cb);
 
     ble_svc_gatt_init();
 }
