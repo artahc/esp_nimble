@@ -61,7 +61,7 @@ static void notify_door_state_cb()
 // Relock
 uint8_t door_cmd_get_relock_duration()
 {
-    return 2;
+    return 0;
 }
 
 static void relock_timer_cb(TimerHandle_t timer)
@@ -73,6 +73,12 @@ static void relock_timer_cb(TimerHandle_t timer)
 void door_cmd_begin_relock_timer()
 {
     uint8_t dur = door_cmd_get_relock_duration();
+    if (dur == 0)
+    {
+        door_cmd_lock();
+        return;
+    }
+
     ESP_LOGI(TAG, "begin relock timer: relock_duration=%d", dur);
 
     if (relock_timer != NULL)
