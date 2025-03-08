@@ -86,38 +86,7 @@ static void nimble_host_stack_init()
     ble_store_config_init(); // for storing bonding information
 }
 
-#define KEYPAD_BUFFER_SIZE 6
-static char keypad_buffer[KEYPAD_BUFFER_SIZE];
-static void keypad_cb(char c)
-{
-    uint8_t len = strlen(keypad_buffer);
-    switch (c)
-    {
-    case '*':
-        memset(keypad_buffer, 0, KEYPAD_BUFFER_SIZE);
-        len = strlen(keypad_buffer);
-        break;
-    case '#':
-        door_cmd_unlock();
-        break;
-    default:
-        if (len >= KEYPAD_BUFFER_SIZE)
-        {
-            for (int i = 1; i < KEYPAD_BUFFER_SIZE; i++)
-            {
-                keypad_buffer[i - 1] = keypad_buffer[i];
-            }
-            keypad_buffer[KEYPAD_BUFFER_SIZE - 1] = c;
-        }
-        else
-        {
-            keypad_buffer[len] = c;
-        }
-        break;
-    }
 
-    ESP_LOGI(TAG, "keypad buffer[%d]: %s", len, keypad_buffer);
-}
 
 void app_main(void)
 {
@@ -146,7 +115,6 @@ void app_main(void)
 
     keypad_init();
 
-    register_keypad_cb(keypad_cb);
 
     printf("Minimum free heap size: %" PRIu32 " bytes\n", esp_get_minimum_free_heap_size());
 
