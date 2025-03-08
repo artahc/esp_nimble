@@ -110,7 +110,7 @@ static void keyboard_cb(keyboard_btn_handle_t kbd_handle, keyboard_btn_report_t 
     }
 }
 
-static void keypad_init()
+static void keyboard_init()
 {
     keyboard_btn_config_t cfg = {
         .input_gpio_num = 4,
@@ -155,7 +155,7 @@ void app_main(void)
 
     door_lock_init();
 
-    keypad_init();
+    keyboard_init();
 
     printf("Minimum free heap size: %" PRIu32 " bytes\n", esp_get_minimum_free_heap_size());
 
