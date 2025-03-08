@@ -79,18 +79,13 @@ void door_cmd_begin_relock_timer()
         return;
     }
 
-    ESP_LOGI(TAG, "begin relock timer: relock_duration=%d", dur);
-
     if (relock_timer != NULL)
     {
-        if (xTimerIsTimerActive(relock_timer))
-        {
-            xTimerStop(relock_timer, 0);
-        }
-        xTimerDelete(relock_timer, 0);
-        relock_timer = NULL;
+        xTimerReset(relock_timer, 0);
+        return;
     }
 
+    ESP_LOGI(TAG, "begin relock timer: relock_duration=%d", dur);
     relock_timer = xTimerCreate("relock_timer", pdMS_TO_TICKS(dur * 1000), pdFALSE, (void *)0, relock_timer_cb);
     xTimerStart(relock_timer, 0);
 }
