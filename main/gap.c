@@ -41,8 +41,7 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
         }
         ble_store_util_delete_peer(&desc.peer_id_addr);
         ESP_LOGI(TAG, "repairing...");
-        return 0;
-        // return BLE_GAP_REPEAT_PAIRING_RETRY;
+        return BLE_GAP_REPEAT_PAIRING_RETRY;
 
     case BLE_GAP_EVENT_PASSKEY_ACTION:
         if (event->passkey.params.action == BLE_SM_IOACT_DISP)

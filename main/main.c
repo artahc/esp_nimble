@@ -17,6 +17,7 @@
 #include "door_lock.h"
 #include "gap.h"
 #include "gatt.h"
+#include "keyboard_button.h"
 
 static const char TAG[] = "esp_ble";
 
@@ -85,6 +86,50 @@ static void nimble_host_stack_init()
     ble_store_config_init(); // for storing bonding information
 }
 
+keyboard_btn_handle_t kbd_handle = NULL;
+const char keymap[4][3] = {
+    {'1', '2', '3'},
+    {'4', '5', '6'},
+    {'7', '8', '9'},
+    {'*', '0', '#'},
+};
+
+static void keyboard_cb(keyboard_btn_handle_t kbd_handle, keyboard_btn_report_t kbd_report, void *user_data)
+{
+    if (kbd_report.key_pressed_num == 0)
+    {
+        return;
+    }
+
+    for (int i = 0; i < kbd_report.key_pressed_num; i++)
+    {
+        uint8_t row = kbd_report.key_data[i].input_index;
+        uint8_t col = kbd_report.key_data[i].output_index;
+        char key = keymap[row][col];
+        ESP_LOGI(TAG, "key pressed: %c\n", key);
+    }
+}
+
+static void keypad_init()
+{
+    keyboard_btn_config_t cfg = {
+        .input_gpio_num = 4,
+        .input_gpios = (int[]){3, 4, 10, 20},
+        .output_gpio_num = 3,
+        .output_gpios = (int[]){5, 6, 7},
+        .active_level = 1,
+        .debounce_ticks = 2,
+        .ticks_interval = 200,
+        .enable_power_save = false,
+    };
+    keyboard_button_create(&cfg, &kbd_handle);
+    keyboard_btn_cb_config_t cb_cfg = {
+        .event = KBD_EVENT_PRESSED,
+        .callback = keyboard_cb,
+    };
+    keyboard_button_register_cb(kbd_handle, cb_cfg, NULL);
+}
+
 void app_main(void)
 {
     esp_err_t ret = nvs_flash_init();
@@ -110,7 +155,9 @@ void app_main(void)
 
     door_lock_init();
 
-    printf("Minimum free heap size: %"PRIu32" bytes\n", esp_get_minimum_free_heap_size());
+    keypad_init();
+
+    printf("Minimum free heap size: %" PRIu32 " bytes\n", esp_get_minimum_free_heap_size());
 
     nimble_port_freertos_init(nimble_host_task);
 }

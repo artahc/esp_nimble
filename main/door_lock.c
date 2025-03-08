@@ -61,7 +61,7 @@ static void notify_door_state_cb()
 // Relock
 uint8_t door_cmd_get_relock_duration()
 {
-    return 5;
+    return 2;
 }
 
 static void relock_timer_cb(TimerHandle_t timer)
